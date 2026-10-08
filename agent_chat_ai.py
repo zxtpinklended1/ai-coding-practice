@@ -1,6 +1,8 @@
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
+import yaml
+
 
 # 1. 加载环境变量与初始化客户端
 load_dotenv()
@@ -9,10 +11,29 @@ client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-# 2. 初始化对话上下文
-messages = [
-    {"role": "system", "content": "你是一个专业的 Python 编程助手。"}
-]
+# 定义人设相关函数
+def load_prompts(path="prompts.yaml"):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+prompts = load_prompts()
+
+menu = {
+    "1": ("socrates", "苏格拉底哲学家"),
+    "2": ("architect", "毒舌Python架构师"),
+    "3": ("guide", "二次元新手村向导"),
+}
+
+for k, (_, name) in menu.items():
+    print(f"{k}. {name}")
+
+choice = input("输入编号 (1/2/3): ").strip()
+key = menu.get(choice, (None, None))[0]
+
+if key and key in prompts:
+    messages = [{"role": "system", "content": prompts[key]}]
+    print(f"\n=== 🤖 {menu[choice][1]} 已激活 ===\n")
+
 
 MAX_TURNS = 20  # 最多保留的对话轮数
 
@@ -76,6 +97,7 @@ if __name__ == "__main__":
     print("=== 🤖 多轮对话 CLI 已启动 ===")
     print("💡 提示：输入 /quit 或 /exit 退出程序\n")
     
+    
     while True:
         try:
             user_input = input("你: ").strip()
@@ -94,3 +116,8 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             print("\n\n检测到强制中断，程序已退出。")
             break
+
+
+
+
+        

@@ -144,63 +144,130 @@
 
 
 # 多轮对话CLI
-import os
-from openai import OpenAI
-from dotenv import load_dotenv
+# import os
+# from openai import OpenAI
+# from dotenv import load_dotenv
 
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("API_KEY"),
-    base_url="https://api.deepseek.com"
-)
+# load_dotenv()
+# client = OpenAI(
+#     api_key=os.getenv("API_KEY"),
+#     base_url="https://api.deepseek.com"
+# )
 
-messages = [{"role": "system", "content": "你是一个专业的 Python 编程助手。"}]
+# messages = [{"role": "system", "content": "你是一个专业的 Python 编程助手。"}]
 
-# 历史长度保护：最多保留最近 N 轮（system + 最近若干组问答），防止 Token 无限膨胀
-MAX_TURNS = 20
+# # 历史长度保护：最多保留最近 N 轮（system + 最近若干组问答），防止 Token 无限膨胀
+# MAX_TURNS = 20
 
-def trim_history():
-    """保留 system 首条 + 最近 MAX_TURNS 组(每组 user+assistant 两条)对话。"""
-    keep = 1 + MAX_TURNS * 2
-    if len(messages) > keep:
-        # 删除最旧的一批，但要保证删除后仍以 user 开头成对
-        del messages[1: len(messages) - (keep - 1)]
+# def trim_history():
+#     """保留 system 首条 + 最近 MAX_TURNS 组(每组 user+assistant 两条)对话。"""
+#     keep = 1 + MAX_TURNS * 2
+#     if len(messages) > keep:
+#         # 删除最旧的一批，但要保证删除后仍以 user 开头成对
+#         del messages[1: len(messages) - (keep - 1)]
 
-def chat_once_stream(user_input):
-    messages.append({"role": "user", "content": user_input})
-    try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=1000,
-            stream=True,          # 开启流式
-        )
-        print("AI: ", end="", flush=True)
-        full = ""
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                piece = chunk.choices[0].delta.content
-                print(piece, end="", flush=True)   # 打字机效果
-                full += piece
-        print()                                    # 流结束后换行
-        messages.append({"role": "assistant", "content": full})
-        trim_history()                          # 每轮结束后裁剪历史
-        return full
-    except Exception as e:
-        # 出错时把刚才追加的 user 撤回，避免污染历史
-        messages.pop()
-        print(f"\n[出错了] {e}")
-        return None
+# def chat_once_stream(user_input):
+#     messages.append({"role": "user", "content": user_input})
+#     try:
+#         response = client.chat.completions.create(
+#             model="deepseek-chat",
+#             messages=messages,
+#             temperature=0.7,
+#             max_tokens=1000,
+#             stream=True,          # 开启流式
+#         )
+#         print("AI: ", end="", flush=True)
+#         full = ""
+#         for chunk in response:
+#             if chunk.choices and chunk.choices[0].delta.content:
+#                 piece = chunk.choices[0].delta.content
+#                 print(piece, end="", flush=True)   # 打字机效果
+#                 full += piece
+#         print()                                    # 流结束后换行
+#         messages.append({"role": "assistant", "content": full})
+#         trim_history()                          # 每轮结束后裁剪历史
+#         return full
+#     except Exception as e:
+#         # 出错时把刚才追加的 user 撤回，避免污染历史
+#         messages.pop()
+#         print(f"\n[出错了] {e}")
+#         return None
 
-if __name__ == "__main__":
-    print("=== 流式多轮对话已启动，输入 /quit 退出 ===\n")
-    while True:
-        user_input = input("你: ").strip()
-        if user_input.lower() in ("/quit", "/exit", "退出"):
-            print("AI: 再见！")
-            break
-        if not user_input:
-            continue
-        chat_once_stream(user_input)
-        print()
+# if __name__ == "__main__":
+#     print("=== 流式多轮对话已启动，输入 /quit 退出 ===\n")
+#     while True:
+#         user_input = input("你: ").strip()
+#         if user_input.lower() in ("/quit", "/exit", "退出"):
+#             print("AI: 再见！")
+#             break
+#         if not user_input:
+#             continue
+#         chat_once_stream(user_input)
+#         print()
+
+# # 自己写的
+# import os
+# from openai import OpenAI
+# from dotenv import load_dotenv
+
+# # 1. 加载环境变量
+# load_dotenv()
+
+# # 2. 初始化客户端 (复用周三的代码)
+# client = OpenAI(
+#     api_key=os.getenv("API_KEY"),
+#     base_url="https://api.deepseek.com"
+# )
+# messages = [
+#         {"role": "system", "content": "你是一个专业的流行音乐老师。"},
+# ]
+
+# MAX_TURNS=20
+# def trim_history():
+#     keep=1+2*MAX_TURNS
+#     if(len(messages)>keep):
+#         del messages[1:len(messages)-(keep-1)]
+
+# def chat_with_ai(user_input, temperature=0.7, max_tokens=1000):
+#     messages.append({"role":"user","content":user_input})
+#     try:
+#         # 3. 发送请求
+#         response = client.chat.completions.create(
+#             model="deepseek-chat",
+#             messages=messages,
+#             temperature=temperature,
+#             max_tokens=max_tokens,
+#             stream=True  # 开启流式模式
+#         )
+
+#         # 4. 处理结果
+#         print("--- 流式输出开始 ---")
+#         full_content = ""
+#         for chunk in response:
+#             # 获取当前片段的文本
+#             if chunk.choices[0].delta.content:
+#                 content = chunk.choices[0].delta.content
+#                 print(content, end="", flush=True) # end=""不换行，flush=True强制刷新
+#                 full_content += content
+#         print("\n--- 结束 ---")
+#         messages.append({"role":"assistant","content":full_content})
+#         trim_history()
+#         return full_content
+
+#     except Exception as e:
+#         messages.pop()
+#         print(f"出错了: {e}")
+#         return None
+
+
+# if __name__ == "__main__":
+#     print("=== 流式多轮对话已启动，输入 /quit 退出 ===\n")
+#     while True:
+#         user_input=input().strip()
+#         if user_input.lower() in ("/quit","/exit","退出"):
+#             print("再见!")
+#             break
+#         if not user_input:
+#             continue
+#         chat_with_ai(user_input)
+#         print()
