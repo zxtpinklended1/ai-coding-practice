@@ -4,6 +4,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 import yaml
 import json
+import tiktoken
+
 
 # 1. 加载环境变量与初始化客户端
 load_dotenv()
@@ -51,22 +53,50 @@ def save_memory(key, value):
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
         json.dump(memory, f, ensure_ascii=False, indent=2)
 
+# MAX_TURNS = 20  # 最多保留的对话轮数
 
-MAX_TURNS = 20  # 最多保留的对话轮数
+# def trim_history(messages):
+#     """
+#     智能裁剪历史：
+#     1. 始终保留 System Prompt (index 0)
+#     2. 删除中间过旧的历史，但确保剩余的第一条是 user 消息（保持 user-assistant 成对）
+#     """
+#     keep = 1 + MAX_TURNS * 2
+#     if len(messages) > keep:
+#         del_index = len(messages) - (keep - 1)
+#         if messages[del_index]["role"] == "assistant":
+#             del_index -= 1
+#         del messages[1:del_index]
 
-def trim_history(messages):
-    """
-    智能裁剪历史：
-    1. 始终保留 System Prompt (index 0)
-    2. 删除中间过旧的历史，但确保剩余的第一条是 user 消息（保持 user-assistant 成对）
-    """
-    keep = 1 + MAX_TURNS * 2
-    if len(messages) > keep:
-        del_index = len(messages) - (keep - 1)
-        if messages[del_index]["role"] == "assistant":
-            del_index -= 1
-        del messages[1:del_index]
+# 定义滑动窗口截断函数
+def trim_history_by_token(messages, max_tokens=3000):
+    # 1. 获取分词尺子
+    encoding = tiktoken.encoding_for_model("gpt-4o-mini") #从 tiktoken 里取出一个专门给 gpt-4o-mini 模型用的编码器，并把它存到变量 encoding 里。
+    system_prompt_token = len(encoding.encode(messages[0]["content"]))# encoding.encode(messages[0]["content"])指用这把分词尺子，把这条消息的文本内容切成 token ID 列表。
+    
+    # 2. 计算当前总 Token 数（包含人设 + 所有历史对话）
+    total_tokens = system_prompt_token + sum(len(encoding.encode(msg["content"])) for msg in messages[1:])
+    
+    # 3. 没超标，直接走人
+    if total_tokens <= max_tokens:
+        return
 
+    # 4. 超标了，开始从最新一条往前累积
+    safe_tokens = 0 # 安全的额度（最新对话的累加）
+    
+    # 从最新一条开始往前遍历 (跳过索引 0)
+    for i in range(len(messages) - 1, 0, -1):
+        current_token = len(encoding.encode(messages[i]["content"]))
+        
+        # 如果加上当前这条就超标了，说明当前这条是“第一个必须被丢弃的旧消息”
+        if safe_tokens + current_token + system_prompt_token > max_tokens:
+            # 直接切掉从索引 1 到 当前索引 i (包含 i) 的所有旧历史
+            del messages[1 : i + 1] 
+            print(f"\n[系统提示] 对话历史超限，已自动裁减，当前剩余 Token 约 {safe_tokens + system_prompt_token}")
+            return
+            
+        # 没超标，这条消息是安全的，累加到 safe_tokens 里
+        safe_tokens += current_token
 
 # ============================================================
 # 工具定义区 —— Function Calling 的"能力说明书"
@@ -185,14 +215,14 @@ def chat_once_stream(messages, prompts, key, user_input):
             print(f"AI: {final_msg.content}")
             if final_msg.content:
                 messages.append({"role": "assistant", "content": final_msg.content})
-                trim_history(messages)
+                trim_history_by_token(messages)
             return final_msg.content
 
         # 没有调用工具，直接输出
         print(f"AI: {msg.content}")
         if msg.content:
             messages.append({"role": "assistant", "content": msg.content})
-            trim_history(messages)
+            trim_history_by_token(messages, max_tokens=3000)
         return msg.content
 
     except Exception as e:
