@@ -1,9 +1,8 @@
-
-"""Agent 核心逻辑：长期记忆、Token 滑动窗口、Function Calling 与单次对话。"""
+"""Agent 核心逻辑：长期记忆、Token 滑动窗口、Function Calling 与 ReAct 循环。"""
 import json
 import os
 from datetime import datetime
-
+import requests
 import tiktoken
 
 from config import client, prompts
@@ -37,7 +36,7 @@ def save_memory(key, value):
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
-def trim_history_by_token(messages, max_tokens=3000):
+def trim_history_by_token(messages, max_tokens=10000):
     """保证 System Prompt + 历史对话不超过 max_tokens。
 
     超标时从最新一条往前累加，删除最早的一批旧消息，始终保留 index 0 的 System Prompt。
@@ -73,40 +72,208 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "save_memory",
-            "description": "当用户要求记住某个事实或偏好时调用，例如姓名、城市、爱好等。",
+            "name": "calculator",
+            "description": "用于执行简单的数学计算，如加减乘除。",
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "expression": {"type": "string", "description": "要计算的数学表达式，例如 '23 * 4 + 5'"}
+                },
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查询全球任意城市的当前天气情况。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string", "description": "记忆分类，如 name, city, hobby"},
-                    "value": {"type": "string", "description": "要记住的内容，如 小明, 成都, 吃火锅"},
+                    "city": {"type": "string", "description": "要查询的城市名称，如 '北京', 'Shanghai'"}
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取电脑本地指定路径的文本文件。支持 .txt, .py, .md, .csv, .json 等纯文本格式。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "要读取的文件的完整路径（支持绝对路径如 'C:/Users/test.txt' 或相对路径 'notes.txt'）。"
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "当用户要求记住某个事实或偏好时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "记忆分类，如 name, hobby"},
+                    "value": {"type": "string", "description": "要记住的内容"},
                 },
                 "required": ["key", "value"],
             },
         },
     },
+    {
+        "type": "function", 
+        "function": { 
+            "name": "list_files",
+            "description": "列出指定目录下的所有文件和文件夹。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dir_path": {
+                        "type": "string", 
+                        "description": "要列出的目录路径，默认为当前目录。"
+                    },
+                },
+                "required": [],
+            },
+        }, 
+    }
 ]
 
-
-def get_current_time():
+# 1. 获取当前时间
+def get_current_time(args=None):
     """返回格式化的当前时间字符串。"""
     return datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
 
+# 2. 简单计算器
+def calculator(expression):
+    """执行数学表达式计算。"""
+    try:
+        # eval 用于计算字符串形式的数学表达式（学习阶段用，生产环境有安全风险）
+        result = eval(expression)
+        return str(result)
+    except Exception as e:
+        return f"计算出错: {e}"
+
+# 3. 查天气 (使用完全免费、免Key的 Open-Meteo 地理编码+天气接口)
+def get_weather(city):
+    """通过城市名查询当前天气。"""
+    try:
+        # 第一步：地理编码，将城市名转为经纬度
+        geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+        geo_resp = requests.get(geo_url, params={"name": city, "count": 1, "language": "zh", "format": "json"}, timeout=8)
+        geo_data = geo_resp.json()
+        if "results" not in geo_data:
+            return f"未找到城市: {city}"
+        lat = geo_data["results"][0]["latitude"]
+        lon = geo_data["results"][0]["longitude"]
+        city_name = geo_data["results"][0]["name"]
+
+        # 第二步：根据经纬度获取当前天气
+        weather_url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat, "longitude": lon,
+            "current_weather": True, "language": "zh"
+        }
+        weather_resp = requests.get(weather_url, params=params, timeout=8)
+        weather_data = weather_resp.json()
+        current = weather_data["current_weather"]
+        temp = current["temperature"]
+        wind_speed = current["windspeed"]
+        return f"{city_name} 当前天气：{temp}℃，风速 {wind_speed} km/h"
+    except Exception as e:
+        return f"天气查询失败: {e}"
+
+# 4. 读取本地文件
+import os
+
+def read_file(file_path):
+    """读取指定路径的文本文件。自动尝试兼容 utf-8 和 gbk 编码。"""
+    try:
+        # 处理反斜杠，兼容 Windows 路径
+        file_path = file_path.replace("\\", "/")
+        
+        # 如果传入的不是绝对路径，尝试拼接当前目录
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(os.getcwd(), file_path)
+
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            # 尝试多种常见编码读取
+            encodings = ['utf-8', 'gbk', 'latin1']
+            for enc in encodings:
+                try:
+                    with open(file_path, "r", encoding=enc) as f:
+                        return f.read()
+                except UnicodeDecodeError:
+                    continue
+            
+            return f"无法解析该文件：文件存在，但可能不是纯文本格式（如图片或可执行文件）：{file_path}"
+        
+        return f"未找到文件：{file_path}"
+    except Exception as e:
+        return f"读取失败：{e}"
+
+# 5. 保存记忆
+def _save_memory_tool(key, value):
+    """保存记忆的工具包装函数。"""
+    save_memory(key, value)
+    return "Memory saved successfully"
+
+# 6. 新增：通用的文件列出函数
+def list_files(dir_path="."):
+    """列出指定目录下的所有文件和文件夹。默认列出当前工作目录。"""
+    try:
+        dir_path = dir_path.replace("\\", "/")
+        if not os.path.isabs(dir_path):
+            dir_path = os.path.join(os.getcwd(), dir_path)
+
+        if not os.path.exists(dir_path):
+            return f"目录不存在：{dir_path}"
+
+        items = os.listdir(dir_path)
+        # 区分文件和文件夹，方便 Agent 判断
+        dirs = [i for i in items if os.path.isdir(os.path.join(dir_path, i))]
+        files = [i for i in items if os.path.isfile(os.path.join(dir_path, i))]
+        return f"📁 文件夹: {dirs}\n📄 文件: {files}"
+    except Exception as e:
+        return f"列出失败：{e}"
+
+# 工具注册表
+TOOLS_MAP = {
+    "get_current_time": get_current_time,
+    "calculator": calculator,
+    "get_weather": get_weather,
+    "read_file": read_file,
+    "save_memory": _save_memory_tool,
+    "list_files": list_files,
+}
 
 def _run_tool(name, args):
-    """按工具名分发执行，返回结果字符串。"""
-    if name == "get_current_time":
-        return get_current_time()
-    if name == "save_memory":
-        save_memory(args.get("key"), args.get("value"))
-        return f"好的，我已经帮你把 {args.get('key')} 记为 {args.get('value')} 了。"
-    return f"未知工具: {name}"
+    if name in TOOLS_MAP:
+        result = TOOLS_MAP[name](**args)
+        return str(result)
+    return f"Unknown tool: {name}"
 
 
-# ---------- 单次对话 ----------
+# ---------- ReAct 循环对话 ----------
 def chat_once(messages, key, user_input):
-    """执行一次对话：注入长期记忆 -> 调用模型（必要时执行工具）-> 截断历史。"""
-    # 把长期记忆拼进 System Prompt；每次重新赋值，避免重复叠加
+    """执行一次对话：注入长期记忆 -> ReAct 循环（思考->行动->观察）-> 截断历史。
+
+    ReAct 循环本质：
+    1. Think（思考）：调用 LLM，让它决定要不要调工具
+    2. Act（行动）：如果调了工具，执行工具函数
+    3. Observe（观察）：把工具结果塞回 messages
+    4. Loop（循环）：带着观察结果重新思考，直到 LLM 决定不调工具为止
+    """
+    # 把长期记忆拼进 System Prompt
     memory = load_memory()
     if memory:
         memory_text = "\n".join(f"- {k}: {v}" for k, v in memory.items())
@@ -116,57 +283,66 @@ def chat_once(messages, key, user_input):
 
     messages.append({"role": "user", "content": user_input})
 
-    try:
-        # 第一次调用：带 tools，由模型决定是否调用工具
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            temperature=0.7,
-            max_tokens=1000,
-            stream=False,
-        )
-        msg = response.choices[0].message
+    # 最大循环步数（防止死循环烧钱）
+    MAX_ITERATIONS = 5
 
-        if msg.tool_calls:
-            # 回塞模型的调用请求
-            messages.append(msg)
-            for tool_call in msg.tool_calls:
-                name = tool_call.function.name
+    try:
+        for i in range(MAX_ITERATIONS):
+            print(f"--- ReAct 循环第 {i + 1} 轮 ---")
+
+            # 第一步：调用 LLM 思考（Think）并决定行动（Act）
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.7,
+                max_tokens=10000,
+                stream=False,
+            )
+
+            assistant_msg = response.choices[0].message
+            # ✅ 将复杂对象转换为干净的 Python 字典
+            assistant_msg_dict = {
+                "role": assistant_msg.role,
+                "content": assistant_msg.content,
+                "tool_calls": assistant_msg.tool_calls,
+            }
+            messages.append(assistant_msg_dict)
+
+
+            # 第二步：判断 LLM 是否还需要调用工具
+            if not assistant_msg.tool_calls:
+                # 没有调用工具，说明 LLM 已经思考完毕，输出最终答案
+                print(f"AI: {assistant_msg.content}")
+                if assistant_msg.content:
+                    messages.append({"role": "assistant", "content": assistant_msg.content})
+                    trim_history_by_token(messages)
+                return assistant_msg.content
+
+            # 第三步：执行工具并观察结果（Observe）
+            for tool_call in assistant_msg.tool_calls:
+                func_name = tool_call.function.name
                 try:
                     args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
                 except json.JSONDecodeError:
                     args = {}
-                result = _run_tool(name, args)
-                # 把工具执行结果喂回模型
+
+                result = _run_tool(func_name, args)
+                print(f"[工具执行结果] {result}")
+
+                # 把工具结果拼回消息列表（纯 observation，不说客套话）
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "name": name,
+                    "name": func_name,
                     "content": result,
                 })
-            # 第二次调用：不带 tools，基于工具结果生成最终回复
-            response2 = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1000,
-            )
-            final = response2.choices[0].message
-            print(f"AI: {final.content}")
-            if final.content:
-                messages.append({"role": "assistant", "content": final.content})
-                trim_history_by_token(messages)
-            return final.content
 
-        print(f"AI: {msg.content}")
-        if msg.content:
-            messages.append({"role": "assistant", "content": msg.content})
-            trim_history_by_token(messages)
-        return msg.content
+        # 超过最大迭代次数，强制退出
+        print("[系统提示] 达到最大迭代次数，对话结束。")
+        return None
 
     except Exception as e:
-        messages.pop()
         print(f"\n[系统错误] {e}")
         return None
