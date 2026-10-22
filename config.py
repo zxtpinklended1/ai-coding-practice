@@ -1,13 +1,12 @@
 
 """全局配置：API 客户端、人设配置、人设菜单。"""
 import os
-
 import yaml
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# 加载 .env 环境变量并初始化 DeepSeek 客户端
 load_dotenv()
+
 client = OpenAI(
     api_key=os.getenv("API_KEY"),
     base_url="https://api.deepseek.com",

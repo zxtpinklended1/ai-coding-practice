@@ -1,4 +1,1 @@
-openai
-python-dotenv
-pyyaml
-tiktoken
+langgraph langchain-openai langchain-core requests python-dotenv pyyaml tiktoken

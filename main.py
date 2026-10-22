@@ -1,7 +1,7 @@
 
 """程序入口：选择人设并进入多轮对话主循环。"""
 from config import prompts, menu
-from agent import chat_once
+from langgraph_agent import LangGraphAgent
 
 
 def main():
@@ -19,9 +19,10 @@ def main():
         print("无效的编号，程序退出。")
         return
 
-    # 初始化消息列表，注入 System Prompt
-    messages = [{"role": "system", "content": prompts[key]}]
     print(f"\n=== {menu[choice][1]} 已激活 ===\n")
+
+    # 初始化 LangGraph Agent
+    agent = LangGraphAgent(system_prompt=prompts[key])
 
     # 主对话循环
     while True:
@@ -32,7 +33,7 @@ def main():
                 break
             if not user_input:
                 continue
-            chat_once(messages, key, user_input)
+            agent.chat(user_input)
         except KeyboardInterrupt:
             print("\n\n检测到强制中断，程序已退出。")
             break
