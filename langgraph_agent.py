@@ -1,10 +1,9 @@
-
 """LangGraph Agent 实现：State、工具、节点、边、图编译、长期记忆、Token 滑动窗口截断。"""
 import os
 import json
 from datetime import datetime
 from typing import Annotated, TypedDict
-
+from tools import TOOLS, load_memory
 import operator
 import requests
 from dotenv import load_dotenv
@@ -16,91 +15,6 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 
 load_dotenv()
-
-# ========== 长期记忆（持久化到 memory.json）==========
-MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
-
-
-def load_memory():
-    """读取长期记忆；文件不存在或损坏时返回空字典。"""
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-    return {}
-
-
-# ========== 工具定义（计算器 / 天气 / 读文件 / 时间 / 记忆）==========
-
-@tool
-def get_current_time() -> str:
-    """获取当前的日期和时间。"""
-    return datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
-
-
-@tool
-def calculator(expression: str) -> str:
-    """执行数学计算，如加减乘除。expression 示例: '23 * 4 + 5'。"""
-    try:
-        return str(eval(expression, {"__builtins__": {}}, {}))
-    except Exception as e:
-        return "计算出错: " + str(e)
-
-
-@tool
-def get_weather(city: str) -> str:
-    """查询城市当前天气（免 Key，基于 Open-Meteo）。city 示例: '北京', 'Shanghai'。"""
-    try:
-        geo = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": city, "count": 1, "language": "zh", "format": "json"},
-            timeout=8,
-        ).json()
-        if "results" not in geo:
-            return "未找到城市: " + str(city)
-        loc = geo["results"][0]
-        cur = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": loc["latitude"], "longitude": loc["longitude"],
-                    "current_weather": True},
-            timeout=8,
-        ).json()["current_weather"]
-        return "%s 当前天气：%s℃，风速 %s km/h" % (loc["name"], cur["temperature"], cur["windspeed"])
-    except Exception as e:
-        return "天气查询失败: " + str(e)
-
-
-@tool
-def read_file(file_path: str) -> str:
-    """读取本地纯文本文件内容，支持绝对/相对路径。"""
-    try:
-        path = os.path.abspath(file_path)
-        if not os.path.isfile(path):
-            return "未找到文件：" + file_path
-        for enc in ("utf-8", "gbk"):
-            try:
-                with open(path, "r", encoding=enc) as f:
-                    return f.read()
-            except UnicodeDecodeError:
-                continue
-        return "无法解析（可能不是纯文本）：" + file_path
-    except Exception as e:
-        return "读取失败：" + str(e)
-
-
-@tool
-def save_memory(key: str, value: str) -> str:
-    """当用户要求记住某个事实或偏好时调用。key 为分类(如 name/hobby)，value 为内容。"""
-    memory = load_memory()
-    memory[key] = value
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
-    return "已记住: %s" % key
-
-
-TOOLS = [get_current_time, calculator, get_weather, read_file, save_memory]
 
 
 # ========== State 定义 ==========

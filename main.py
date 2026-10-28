@@ -1,4 +1,3 @@
-
 """程序入口：选择人设并进入多轮对话主循环。"""
 from config import prompts, menu
 from langgraph_agent import LangGraphAgent
